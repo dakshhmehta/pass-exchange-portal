@@ -1,0 +1,12 @@
+/* Minimal overrides — Framework7 MD theme does the heavy lifting. */
+.book-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+.bidask {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
