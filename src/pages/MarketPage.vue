@@ -11,7 +11,7 @@
       </f7-nav-right>
     </f7-navbar>
 
-    <f7-block-title>Today's Market</f7-block-title>
+    <f7-block-title>Market</f7-block-title>
     <f7-block v-if="loading"><f7-skeleton-text>Loading market…</f7-skeleton-text></f7-block>
     <f7-block v-if="error" class="color-red">{{ error }}</f7-block>
     <f7-block v-if="!loading && !store.instruments.length && !error" class="opacity-60">

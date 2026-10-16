@@ -1,7 +1,7 @@
 <template>
   <f7-page name="detail" ptr @ptr:refresh="onRefresh">
     <f7-navbar :title="meta.name" back-link="Market" />
-    <f7-block-title>{{ meta.name }} — Today</f7-block-title>
+    <f7-block-title>{{ meta.name }} · Live</f7-block-title>
     <f7-card>
       <f7-card-content>
         <div class="grid grid-cols-3 text-align-center">
@@ -28,12 +28,12 @@
           {{ placing ? 'Placing…' : side }}
         </f7-button>
         <p v-if="msg" :class="msgOk ? 'color-green' : 'color-red'">{{ msg }}</p>
-        <p class="opacity-60"><small>Limit orders only. Orders expire at midnight.</small></p>
+        <p class="opacity-60"><small>Limit orders only. Open orders expire when the pass expires.</small></p>
       </f7-card-content>
     </f7-card>
 
     <!-- Book -->
-    <f7-block-title>Order Book (today)</f7-block-title>
+    <f7-block-title>Order Book</f7-block-title>
     <div class="grid grid-cols-2 grid-gap">
       <f7-card>
         <f7-card-header>Bids</f7-card-header>
@@ -64,7 +64,7 @@
         :after="time(t.created_at)"
       />
     </f7-list>
-    <f7-block v-else class="opacity-60">No trades today yet.</f7-block>
+    <f7-block v-else class="opacity-60">No trades yet.</f7-block>
 
     <f7-toolbar bottom tabbar>
       <f7-link href="/">Market</f7-link>
@@ -76,7 +76,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { f7 } from 'framework7-vue';
-import { store, refreshSession, needsProfile, todayStartISO } from '../js/store.js';
+import { store, refreshSession, needsProfile } from '../js/store.js';
 import { supabase } from '../js/supabase.js';
 
 const props = defineProps({ f7route: Object });
@@ -105,7 +105,6 @@ function time(iso) {
 }
 
 async function reload() {
-  const since = todayStartISO();
   const { data: inst } = await supabase
     .from('instruments')
     .select('pass_code, name, prev_close')
@@ -117,7 +116,6 @@ async function reload() {
     .from('trades')
     .select('id, price, qty, created_at')
     .eq('instrument_code', code)
-    .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(20);
   trades.value = ts ?? [];
@@ -128,8 +126,7 @@ async function reload() {
     .from('orders')
     .select('side, price, remaining_qty')
     .eq('instrument_code', code)
-    .in('status', ['OPEN', 'PARTIAL'])
-    .gte('created_at', since);
+    .in('status', ['OPEN', 'PARTIAL']);
   const agg = (rows, s, desc) => {
     const map = new Map();
     for (const r of rows ?? []) {

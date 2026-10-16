@@ -19,6 +19,8 @@ create table if not exists public.instruments (
   name text not null,
   prev_close numeric not null check (prev_close > 0),
   is_active boolean not null default true,
+  -- Per-instrument expiry (admin sets manually). Open orders auto-expire after this.
+  expires_at timestamptz,
   created_at timestamptz not null default now()
 );
 -- Admin adds pass codes manually, e.g.:
@@ -34,7 +36,7 @@ create table if not exists public.orders (
   qty numeric not null check (qty > 0),
   remaining_qty numeric not null check (remaining_qty >= 0),
   status text not null default 'OPEN'
-    check (status in ('OPEN', 'PARTIAL', 'FILLED', 'CANCELLED', 'EXPIRED')),
+    check (status in ('OPEN', 'PARTIAL', 'MATCHED', 'COMPLETED', 'CANCELLED', 'EXPIRED')),
   created_at timestamptz not null default now()
 );
 create index if not exists orders_book_idx on public.orders
@@ -51,6 +53,10 @@ create table if not exists public.trades (
   sell_order_id uuid references public.orders(id),
   buyer_id uuid,
   seller_id uuid,
+  -- Offline settlement (single-confirm: either party taps Deal Done)
+  buyer_done boolean not null default false,
+  seller_done boolean not null default false,
+  completed_at timestamptz,
   created_at timestamptz not null default now()
 );
 create index if not exists trades_inst_idx on public.trades (instrument_code, created_at desc);
@@ -138,19 +144,23 @@ begin
   if not exists (select 1 from public.instruments where pass_code = p_instrument and is_active) then
     raise exception 'Unknown or inactive pass code';
   end if;
+  if exists (select 1 from public.instruments
+             where pass_code = p_instrument and expires_at is not null and expires_at <= now()) then
+    raise exception 'This pass has expired — new orders are closed';
+  end if;
 
   insert into public.orders (user_id, instrument_code, side, price, qty, remaining_qty, status)
   values (v_uid, p_instrument, p_side, p_price, p_qty, p_qty, 'OPEN')
   returning id into v_taker_id;
 
   -- Match against opposite side, price-compatible, oldest first.
+  -- No day filter: orders stay live until the instrument expires.
   for v_maker in
     select * from public.orders
     where instrument_code = p_instrument
       and status in ('OPEN', 'PARTIAL')
       and id != v_taker_id
       and user_id != v_uid
-      and created_at >= public.ist_day_start()
       and ((p_side = 'BUY' and side = 'SELL' and price <= p_price)
         or (p_side = 'SELL' and side = 'BUY' and price >= p_price))
     order by
@@ -175,7 +185,7 @@ begin
 
     update public.orders
     set remaining_qty = remaining_qty - v_take,
-        status = case when remaining_qty - v_take = 0 then 'FILLED' else 'PARTIAL' end
+        status = case when remaining_qty - v_take = 0 then 'MATCHED' else 'PARTIAL' end
     where id = v_maker.id;
 
     v_taker_remaining := v_taker_remaining - v_take;
@@ -185,7 +195,7 @@ begin
   update public.orders
   set remaining_qty = v_taker_remaining,
       status = case
-        when v_taker_remaining = 0 then 'FILLED'
+        when v_taker_remaining = 0 then 'MATCHED'
         when v_filled > 0 then 'PARTIAL'
         else 'OPEN' end
   where id = v_taker_id;
@@ -193,7 +203,7 @@ begin
   return jsonb_build_object('order_id', v_taker_id, 'filled', v_filled, 'remaining', v_taker_remaining);
 end $$;
 
--- 5. cancel_my_order — today's own open orders only --------------
+-- 5. cancel_my_order — own open orders only ----------------------
 create or replace function public.cancel_my_order(p_order_id uuid)
 returns void
 language plpgsql security definer set search_path = public as $$
@@ -202,18 +212,19 @@ begin
   set status = 'CANCELLED'
   where id = p_order_id
     and user_id = auth.uid()
-    and status in ('OPEN', 'PARTIAL')
-    and created_at >= public.ist_day_start();
+    and status in ('OPEN', 'PARTIAL');
   if not found then raise exception 'Order not found or not cancellable'; end if;
 end $$;
 
 -- 6. get_my_matches — counterpart contact for my fills only ------
 -- Privacy: caller sees ONLY trades where they are buyer or seller.
-create or replace function public.get_my_matches(p_date date default current_date)
+-- p_date null = all time (orders now live until instrument expiry).
+create or replace function public.get_my_matches(p_date date default null)
 returns table (
   trade_id uuid, instrument_code text, my_side text,
   price numeric, qty numeric,
-  counterpart_name text, counterpart_mobile text, created_at timestamptz
+  counterpart_name text, counterpart_mobile text,
+  completed boolean, created_at timestamptz
 )
 language plpgsql security definer set search_path = public as $$
 begin
@@ -221,17 +232,88 @@ begin
   select t.id, t.instrument_code,
     case when t.buyer_id = auth.uid() then 'BOUGHT' else 'SOLD' end,
     t.price, t.qty,
-    p.name, p.mobile, t.created_at
+    p.name, p.mobile,
+    (t.buyer_done or t.seller_done),
+    t.created_at
   from public.trades t
   join public.profiles p
     on p.id = case when t.buyer_id = auth.uid() then t.seller_id else t.buyer_id end
   where (t.buyer_id = auth.uid() or t.seller_id = auth.uid())
-    and t.created_at >= p_date::timestamptz
-    and t.created_at < (p_date + 1)::timestamptz
+    and (p_date is null
+      or (t.created_at >= p_date::timestamptz and t.created_at < (p_date + 1)::timestamptz))
   order by t.created_at desc;
 end $$;
 
--- 7. Daily expiry — expire yesterday's book, roll prev_close ----
+-- 6b. mark_match_complete — single-confirm settlement ------------
+create or replace function public.mark_match_complete(p_trade_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_buyer uuid;
+  v_seller uuid;
+  v_buy_order uuid;
+  v_sell_order uuid;
+begin
+  select buyer_id, seller_id, buy_order_id, sell_order_id
+    into v_buyer, v_seller, v_buy_order, v_sell_order
+  from public.trades where id = p_trade_id;
+  if not found then raise exception 'Match not found'; end if;
+
+  if auth.uid() = v_buyer then
+    update public.trades set buyer_done = true where id = p_trade_id;
+  elsif auth.uid() = v_seller then
+    update public.trades set seller_done = true where id = p_trade_id;
+  else
+    raise exception 'Not your match';
+  end if;
+
+  update public.trades
+  set completed_at = now()
+  where id = p_trade_id and (buyer_done or seller_done) and completed_at is null;
+
+  -- Flip fully-settled orders to COMPLETED
+  update public.orders o
+  set status = 'COMPLETED'
+  where o.id in (v_buy_order, v_sell_order)
+    and o.remaining_qty = 0
+    and not exists (
+      select 1 from public.trades t
+      where (t.buy_order_id = o.id or t.sell_order_id = o.id)
+        and not (t.buyer_done or t.seller_done)
+    );
+end $$;
+
+-- 7b. Per-instrument expiry — run every few minutes via cron ----
+create or replace function public.expire_instrument_orders()
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  r record;
+  v_last numeric;
+begin
+  for r in
+    select pass_code from public.instruments
+    where is_active and expires_at is not null and expires_at <= now()
+  loop
+    select t.price into v_last
+    from public.trades t
+    where t.instrument_code = r.pass_code
+    order by t.created_at desc limit 1;
+
+    update public.instruments
+    set prev_close = coalesce(v_last, prev_close),
+        is_active = false -- expired pass leaves the market; admin can re-list
+    where pass_code = r.pass_code;
+
+    update public.orders
+    set status = 'EXPIRED'
+    where instrument_code = r.pass_code
+      and status in ('OPEN', 'PARTIAL');
+  end loop;
+end $$;
+
+-- 7. Daily prev_close roll (midnight IST) — keeps % change fresh ----
+-- (Per-instrument expiry is handled by expire_instrument_orders above.)
 create or replace function public.expire_orders_daily()
 returns void
 language plpgsql security definer set search_path = public as $$
@@ -252,27 +334,33 @@ begin
     )
     where i.pass_code = r.instrument_code;
   end loop;
-
-  update public.orders
-  set status = 'EXPIRED'
-  where status in ('OPEN', 'PARTIAL')
-    and created_at < v_start;
 end $$;
 
--- 8. Cron — schedule expire_orders_daily at 00:00 Asia/Kolkata ----
--- pg_cron runs in UTC; 00:00 IST = 18:30 UTC (previous day).
+-- 8. Cron ----------------------------------------------------------
+-- a) Midnight IST prev_close roll (pg_cron runs in UTC; 00:00 IST = 18:30 UTC previous day)
+-- b) Per-instrument expiry sweeper — every 5 minutes
 -- Run once in SQL Editor (requires pg_cron enabled: Database > Extensions):
 --
 --   create extension if not exists pg_cron;
 --   select cron.schedule(
---     'passx-midnight-expiry',
+--     'passx-midnight-roll',
 --     '30 18 * * *',
 --     $$select public.expire_orders_daily()$$
 --   );
+--   select cron.schedule(
+--     'passx-instrument-expiry',
+--     '*/5 * * * *',
+--     $$select public.expire_instrument_orders()$$
+--   );
 --
--- Verify: select * from cron.job;
+-- If you already scheduled the old 'passx-midnight-expiry' job, replace it:
+--   select cron.unschedule('passx-midnight-expiry');
+--
+-- Verify: select jobname, schedule from cron.job;
 
 -- 9. Function grants (SECURITY DEFINER still needs EXECUTE) --
 grant execute on function public.place_limit_order(text, text, numeric, numeric) to authenticated;
 grant execute on function public.cancel_my_order(uuid) to authenticated;
 grant execute on function public.get_my_matches(date) to authenticated;
+grant execute on function public.expire_instrument_orders() to authenticated;
+grant execute on function public.mark_match_complete(uuid) to authenticated;

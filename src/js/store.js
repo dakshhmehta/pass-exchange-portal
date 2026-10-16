@@ -65,14 +65,7 @@ export async function signOut() {
   store.matchCount = 0;
 }
 
-// ---- Market helpers (today = Asia/Kolkata day) ----
-function istToday() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
-}
-export function todayStartISO() {
-  return new Date(istToday() + 'T00:00:00+05:30').toISOString();
-}
-
+// ---- Market helpers (orders live until the instrument expires) ----
 export async function loadMarket() {
   const { data: insts, error } = await supabase
     .from('instruments')
@@ -80,28 +73,25 @@ export async function loadMarket() {
     .eq('is_active', true)
     .order('pass_code');
   if (error) throw error;
-  const since = todayStartISO();
   const out = [];
   for (const i of insts ?? []) {
     const { data: trades } = await supabase
       .from('trades')
       .select('price, qty, created_at')
       .eq('instrument_code', i.pass_code)
-      .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(500);
+      .limit(1000);
     const t = trades ?? [];
     const ltp = t.length ? Number(t[0].price) : null;
     const volume = t.reduce((s, r) => s + Number(r.qty), 0);
     const prev = Number(i.prev_close);
     const changePct = ltp != null && prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
-    // Best bid (highest BUY) / best ask (lowest SELL) from today's book
+    // Best bid (highest BUY) / best ask (lowest SELL) from the live book
     const { data: book } = await supabase
       .from('orders')
       .select('side, price')
       .eq('instrument_code', i.pass_code)
       .in('status', ['OPEN', 'PARTIAL'])
-      .gte('created_at', since)
       .limit(1000);
     let bestBid = null;
     let bestAsk = null;
@@ -118,7 +108,7 @@ export async function loadMarket() {
 export async function loadMyMatches() {
   if (!store.user) return;
   const { data, error } = await supabase.rpc('get_my_matches', {
-    p_date: istToday(),
+    p_date: null,
   });
   if (error) {
     console.warn('[PassX] get_my_matches', error.message);

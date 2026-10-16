@@ -9,7 +9,7 @@ Minimal pass limit-order exchange. **Framework7 (MD theme, auto dark/light) + Vu
 - Market list: LTP, Prev Close, % change, Volume (today)
 - Detail: order book (today's bids/asks), recent trades, order form
 - Match notification: counterpart name + mobile appears under **Orders › Matches** so you settle payment + pass offline
-- Daily expiry: book resets at 12am (cron marks stale orders `EXPIRED`, rolls `prev_close` to last trade)
+- Per-instrument expiry: admin sets `expires_at` per pass; a 5-min cron marks its open orders `EXPIRED`, rolls `prev_close`, and delists it (`is_active=false`)
 
 ## 1. Supabase setup
 
@@ -19,18 +19,22 @@ Minimal pass limit-order exchange. **Framework7 (MD theme, auto dark/light) + Vu
 4. **Auth → URL Configuration →** Site URL = your Pages domain; add Redirect URLs:
    - `http://localhost:5173/**`
    - `https://<your>.pages.dev/**`
-5. **Admin — add pass codes manually** (Table Editor → `instruments`):
+5. **Admin — add pass codes manually** (Table Editor → `instruments`), each with its own expiry:
    ```sql
-   insert into public.instruments (pass_code, name, prev_close)
-   values ('VIP2026', 'VIP Season Pass', 500);
+   insert into public.instruments (pass_code, name, prev_close, expires_at)
+   values ('VIP2026', 'VIP Season Pass', 500, '2026-12-31 18:00:00+05:30');
    ```
-6. **Daily expiry cron** — SQL Editor (needs `pg_cron` extension enabled):
+6. **Expiry crons** — SQL Editor (needs `pg_cron` extension enabled):
    ```sql
    create extension if not exists pg_cron;
-   select cron.schedule('passx-midnight-expiry', '30 18 * * *',
+   -- midnight IST prev_close roll
+   select cron.schedule('passx-midnight-roll', '30 18 * * *',
      $$select public.expire_orders_daily()$$);
+   -- per-instrument expiry sweeper, every 5 min
+   select cron.schedule('passx-instrument-expiry', '*/5 * * * *',
+     $$select public.expire_instrument_orders()$$);
    ```
-   (`18:30 UTC` = `00:00 Asia/Kolkata`.)
+   (`18:30 UTC` = `00:00 Asia/Kolkata`. If you scheduled the old `passx-midnight-expiry` job: `select cron.unschedule('passx-midnight-expiry');`)
 
 ## 2. Local dev
 
