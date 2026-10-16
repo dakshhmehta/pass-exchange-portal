@@ -67,8 +67,8 @@
     <f7-block v-else class="opacity-60">No trades yet.</f7-block>
 
     <f7-toolbar bottom tabbar>
-      <f7-link href="/">Market</f7-link>
-      <f7-link href="/orders/">Orders</f7-link>
+      <f7-link href="/" icon-material="storefront" text="Market" />
+      <f7-link href="/orders/" icon-material="receipt_long" text="Orders" />
     </f7-toolbar>
   </f7-page>
 </template>

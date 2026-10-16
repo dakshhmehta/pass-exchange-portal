@@ -1,13 +1,11 @@
 <template>
   <f7-page name="market" ptr @ptr:refresh="onRefresh">
-    <f7-navbar title="Pass Exchange Portal">
+    <f7-navbar title="Pass Exchange Portal" :subtitle="`v${APP_VERSION}`">
       <f7-nav-right>
-        <f7-link href="/orders/" class="position-relative">
-          Matches
+        <f7-link href="/orders/" icon-only icon-material="handshake" class="position-relative">
           <f7-badge v-if="store.matchCount" color="red">{{ store.matchCount }}</f7-badge>
         </f7-link>
-        <f7-link href="/profile/">{{ shortName }}</f7-link>
-        <f7-link @click="logout">Logout</f7-link>
+        <f7-link href="/profile/" icon-only icon-material="person" />
       </f7-nav-right>
     </f7-navbar>
 
@@ -42,23 +40,21 @@
     </f7-list>
 
     <f7-toolbar bottom tabbar>
-      <f7-link tab-link-active href="/">Market</f7-link>
-      <f7-link href="/orders/">Orders</f7-link>
+      <f7-link tab-link-active href="/" icon-material="storefront" text="Market" />
+      <f7-link href="/orders/" icon-material="receipt_long" text="Orders" />
     </f7-toolbar>
   </f7-page>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { f7 } from 'framework7-vue';
-import { store, refreshSession, needsProfile, loadMarket, loadMyMatches, signOut } from '../js/store.js';
+import { store, refreshSession, needsProfile, loadMarket, loadMyMatches, APP_VERSION } from '../js/store.js';
 import { supabase } from '../js/supabase.js';
 
 const loading = ref(true);
 const error = ref('');
 let channel = null;
-
-const shortName = computed(() => store.profile?.name?.split(' ')[0] || store.user?.email || 'Profile');
 
 function fmt(n) {
   return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -79,10 +75,6 @@ async function reload() {
 async function onRefresh(done) {
   await reload();
   done();
-}
-async function logout() {
-  await signOut();
-  f7.views.main.router.navigate('/login/', { reloadCurrent: true });
 }
 
 onMounted(async () => {

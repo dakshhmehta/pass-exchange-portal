@@ -26,6 +26,7 @@
         {{ busy ? 'Saving…' : 'Save & Continue' }}
       </f7-button>
       <p v-if="error" class="color-red">{{ error }}</p>
+      <f7-button large outline class="margin-top" @click="logout">Logout</f7-button>
     </f7-block>
   </f7-page>
 </template>
@@ -33,7 +34,7 @@
 <script setup>
 import { ref } from 'vue';
 import { f7 } from 'framework7-vue';
-import { store, saveProfile } from '../js/store.js';
+import { store, saveProfile, signOut } from '../js/store.js';
 
 const googleName =
   store.user?.user_metadata?.full_name || store.user?.user_metadata?.name || '';
@@ -61,5 +62,10 @@ async function save() {
   } finally {
     busy.value = false;
   }
+}
+
+async function logout() {
+  await signOut();
+  f7.views.main.router.navigate('/login/', { reloadCurrent: true });
 }
 </script>

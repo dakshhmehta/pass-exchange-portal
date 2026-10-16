@@ -2,6 +2,7 @@ import { reactive } from 'vue';
 import { supabase } from './supabase.js';
 
 // Minimal global store — session, profile, market cache.
+export const APP_VERSION = '0.1';
 export const store = reactive({
   session: null,
   user: null,

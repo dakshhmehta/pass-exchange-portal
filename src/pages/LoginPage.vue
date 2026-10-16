@@ -2,7 +2,8 @@
   <f7-page name="login">
     <f7-navbar title="Pass Exchange Portal" />
     <f7-block class="text-align-center" style="margin-top: 15vh">
-      <h2>Pass Exchange Portal</h2>
+      <h2 class="no-margin">Pass Exchange Portal</h2>
+      <small class="opacity-60">v{{ APP_VERSION }}</small>
       <p class="opacity-60">Sign in to trade passes</p>
       <f7-button large fill @click="login" :disabled="busy">
         {{ busy ? 'Opening Google…' : 'Sign in with Google' }}
@@ -18,7 +19,7 @@
 
 <script setup>
 import { ref } from 'vue';
-import { signInWithGoogle } from '../js/store.js';
+import { signInWithGoogle, APP_VERSION } from '../js/store.js';
 
 const busy = ref(false);
 const error = ref('');

@@ -49,8 +49,8 @@
     </f7-card>
 
     <f7-toolbar bottom tabbar>
-      <f7-link href="/">Market</f7-link>
-      <f7-link tab-link-active href="/orders/">Orders</f7-link>
+      <f7-link href="/" icon-material="storefront" text="Market" />
+      <f7-link tab-link-active href="/orders/" icon-material="receipt_long" text="Orders" />
     </f7-toolbar>
   </f7-page>
 </template>
